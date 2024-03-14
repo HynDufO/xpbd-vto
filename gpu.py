@@ -38,16 +38,17 @@ import numpy as np
 import warp as wp
 import math
 import time
+import heapq
 
 wp.init()
 
 # ---------------------------------------------
 
-targetFps = 80
+targetFps = 60
 numSubsteps = 30
-timeStep = 1.0 / 80.0
+timeStep = 1.0 / 60.0
 # timeStep = 3.0
-gravity = wp.vec3(0.0, -9.0, 0.0)
+gravity = wp.vec3(0.0, -9.8, 0.0)
 velMax = 0.03
 paused = False
 hidden = False
@@ -114,84 +115,6 @@ def triangle_closest_point_barycentric(a: wp.vec3, b: wp.vec3, c: wp.vec3, p: wp
 
     return wp.vec3(1.0 - v - w, v, w)
 
-class Hash:
-    def __init__(self, spacing, maxNumObjects):
-        self.spacing = spacing
-        self.tableSize = 2 * maxNumObjects
-        self.cellStart = [0] * (self.tableSize + 1)
-        self.cellEntries = [0] * maxNumObjects
-        self.queryIds = [0] * (2 * maxNumObjects)
-        self.querySize = 0
-
-    def hashCoords(self, xi, yi, zi):
-        h = (xi * 92837111) ^ (yi * 689287499) ^ (zi * 283923481)  # fantasy function
-        return abs(h) % self.tableSize
-
-    def intCoord(self, coord):
-        return int(coord / self.spacing)
-
-    def hashPos(self, pos, nr):
-        return self.hashCoords(
-            self.intCoord(pos[nr][0]),
-            self.intCoord(pos[nr][1]),
-            self.intCoord(pos[nr][2])
-        )
-
-    def create(self, pos):
-        numObjects = min(len(pos), len(self.cellEntries))
-
-        # determine cell sizes
-        self.cellStart = [0] * len(self.cellStart)
-        self.cellEntries = [0] * len(self.cellEntries)
-
-        for i in range(numObjects):
-            h = self.hashPos(pos, i)
-            self.cellStart[h] += 1
-
-        # determine cells starts
-        start = 0
-        for i in range(self.tableSize):
-            start += self.cellStart[i]
-            self.cellStart[i] = start
-        self.cellStart[self.tableSize] = start  # guard
-
-        # fill in objects ids
-        for i in range(numObjects):
-            h = self.hashPos(pos, i)
-            self.cellStart[h] -= 1
-            self.cellEntries[self.cellStart[h]] = i
-
-    def query(self, pos, np, nq, nr, maxDist):
-
-        xMin = min(pos[np][0], pos[nq][0], pos[nr][0])
-        xMax = max(pos[np][0], pos[nq][0], pos[nr][0])
-        yMin = min(pos[np][1], pos[nq][1], pos[nr][1])
-        yMax = max(pos[np][1], pos[nq][1], pos[nr][1])
-        zMin = min(pos[np][2], pos[nq][2], pos[nr][2])
-        zMax = max(pos[np][2], pos[nq][2], pos[nr][2])
-
-        x0 = self.intCoord(xMin - maxDist)
-        y0 = self.intCoord(yMin - maxDist)
-        z0 = self.intCoord(zMin - maxDist)
-
-        x1 = self.intCoord(xMax + maxDist)
-        y1 = self.intCoord(yMax + maxDist)
-        z1 = self.intCoord(zMax + maxDist)
-
-        self.querySize = 0
-
-        for xi in range(x0, x1 + 1):
-            for yi in range(y0, y1 + 1):
-                for zi in range(z0, z1 + 1):
-                    h = self.hashCoords(xi, yi, zi)
-                    start = self.cellStart[h]
-                    end = self.cellStart[h + 1]
-
-                    for i in range(start, end):
-                        if self.querySize >= 6890:
-                            print("QS =", self.querySize)
-                        self.queryIds[self.querySize] = self.cellEntries[i]
-                        self.querySize += 1
 class Cloth:
 
     @wp.kernel
@@ -487,14 +410,12 @@ class Cloth:
         self.triDist = wp.zeros(self.numTris, dtype = float, device = "cuda")
         self.hostTriDist = wp.zeros(self.numTris, dtype = float, device = "cpu")
 
-        maxDist = 0.0008
-        self.hash = Hash(spacing, len(bodyVertices))
-        self.hash.create(self.hostBodyPos.numpy())
         start_time = time.time()
-        self.numCollisions = self.queryAllCloseBodyParticles(self.hostTriIds, self.hostPos.numpy(), maxDist)
-        print("Num collisions =", self.numCollisions)
+        # self.numCollisions = self.queryAllCloseBodyParticles(self.hostTriIds, pos, bodyPos, 5)
+        self.numCollisions = self.readTriPointPairs("tri_point_pairs.txt", self.hostTriIds)
         end_time = time.time()
         print("Elapsed time:", end_time - start_time, "seconds")
+        print("Num collisions =", self.numCollisions)
         print(str(self.numTris) + " triangles created")
         print(str(self.numDistConstraints) + " distance constraints created")
         print(str(self.numParticles) + " particles created")
@@ -664,7 +585,7 @@ class Cloth:
         c = wp.min(dist - 0.00025, 0.0)  # 0 unless within 0.01 of surface
         if c == 0:
             return
-        fn = n * c * 3e5
+        fn = n * c * 9e5
         wp.atomic_add(f, i, fn * bary[0])
         wp.atomic_add(f, j, fn * bary[1])
         wp.atomic_add(f, k, fn * bary[2])
@@ -724,29 +645,62 @@ class Cloth:
 
 
     # ----------------------------------
-    def queryAllCloseBodyParticles(self, triIds, pos, maxDist):
+    def getDist2(self, x, y, z, x1, y1, z1):
+        return (x - x1) * (x - x1) + (y - y1) * (y - y1) + (z - z1) * (z - z1)
+    # ----------------------------------
+    def readTriPointPairs(self, filename, triIds):
+        with open(filename, 'r') as file:
+            n = int(file.readline().strip())  # Read the length of the arrays
+            num = 0
+            self.adjIds = [0] * n
+            self.adjIdsTri = [0] * n
+            for _ in range(n):
+                idTri, id = map(int, file.readline().strip().split())
+                self.adjIds[num] = id
+                self.adjIdsTri[num] = idTri
+                if idTri == 7135 and len(self.renderParticles1) == 0:
+                    self.renderParticles1.append(triIds[3 * idTri])
+                    self.renderParticles1.append(triIds[3 * idTri + 1])
+                    self.renderParticles1.append(triIds[3 * idTri + 2])
+                if idTri == 7135:
+                    self.renderParticles2.append(self.adjIds[num])
+                num += 1
+            self.adjIdsCuda = wp.array(self.adjIds, dtype = wp.int32, device = "cuda")
+            self.adjIdsTriCuda = wp.array(self.adjIdsTri, dtype = wp.int32, device = "cuda")
+            return n
+
+    # ----------------------------------
+    def queryAllCloseBodyParticles(self, triIds, triPos, pos, numPointsEach):
         num = 0
         numTris = len(triIds) // 3
+        numPoints = len(pos) // 3
+        self.adjIds = [0] * (numPointsEach * numTris)
+        self.adjIdsTri = [0] * (numPointsEach * numTris)
         for iTri in range(numTris):
-            self.hash.query(pos, triIds[3 * iTri], triIds[3 * iTri + 1], triIds[3 * iTri + 2], maxDist)
-            if iTri == 12000:
-                self.renderParticles1.append(triIds[3 * iTri])
-                self.renderParticles1.append(triIds[3 * iTri + 1])
-                self.renderParticles1.append(triIds[3 * iTri + 2])
-            for j in range(self.hash.querySize):
-                if num >= len(self.adjIds):
-                    newIds = [0] * (2 * num)  # dynamic array
-                    newIds[:num] = self.adjIds
-                    self.adjIds = newIds
-
-                    newIds1 = [0] * (2 * num)
-                    newIds1[:num] = self.adjIdsTri
-                    self.adjIdsTri = newIds1
-                self.adjIds[num] = self.hash.queryIds[j]
+            print(iTri)
+            heap = []
+            for iPoint in range(numPoints):
+                sumDist2 = 0
+                x, y, z = pos[3 * iPoint], pos[3 * iPoint + 1], pos[3 * iPoint + 2]
+                for j in range(3):
+                    p = triIds[3 * iTri + j]
+                    dist2 = self.getDist2(triPos[3 * p], triPos[3 * p + 1], triPos[3 * p + 2], x, y, z)
+                    sumDist2 += dist2
+                heapq.heappush(heap, (-sumDist2, iPoint))
+                if len(heap) > numPointsEach:
+                    heapq.heappop(heap)
+            assert(len(heap) == numPointsEach)
+            for i in range(numPointsEach):
+                self.adjIds[num] = heap[i][1]
                 self.adjIdsTri[num] = iTri 
                 if iTri == 12000:
                     self.renderParticles2.append(self.adjIds[num])
                 num += 1
+            if iTri == 12000:
+                self.renderParticles1.append(triIds[3 * iTri])
+                self.renderParticles1.append(triIds[3 * iTri + 1])
+                self.renderParticles1.append(triIds[3 * iTri + 2])
+
         self.adjIdsCuda = wp.array(self.adjIds[:num], dtype = wp.int32, device = "cuda")
         self.adjIdsTriCuda = wp.array(self.adjIdsTri[:num], dtype = wp.int32, device = "cuda")
         return num
@@ -758,7 +712,6 @@ class Cloth:
         dt = timeStep / numSubsteps
         numPasses = len(self.passSizes)
 
-        start_time = time.time()
         for step in range(numSubsteps):  
             # wp.launch(kernel = self.integrate, 
             #     inputs = [dt, gravity, self.invMass, self.prevPos, self.pos, self.vel, self.sphereCenter, self.sphereRadius], 
@@ -816,8 +769,6 @@ class Cloth:
                 inputs = [dt, self.prevPos, self.pos, self.vel], dim = self.numParticles, device = "cuda")
             
         wp.copy(self.hostPos, self.pos)
-        end_time = time.time()
-        print("Elapsed time 1:", end_time - start_time, "seconds")
 
     # -------------------------------------------------
     def reset(self):
@@ -978,10 +929,8 @@ class Cloth:
             self.renderParticles.pop()
 
         for id in self.renderParticles1:
-            print(id)
             glPushMatrix()
             p = pos[id]
-            print(p[0], p[1], p[2])
             glTranslatef(p[0], p[1], p[2])
             gluSphere(q, 0.005, 40, 40)
             glPopMatrix()
