@@ -406,16 +406,17 @@ class Cloth:
             self.bodyTriIds[3 * i + 2] = bodyTriangles[i][2]
 
         self.triIds = wp.array(self.hostTriIds, dtype = wp.int32, device = "cuda")
+        self.bodyTriIdsCuda = wp.array(self.bodyTriIds, dtype = wp.int32, device = "cuda")
 
         self.triDist = wp.zeros(self.numTris, dtype = float, device = "cuda")
         self.hostTriDist = wp.zeros(self.numTris, dtype = float, device = "cpu")
 
         start_time = time.time()
         # self.numCollisions = self.queryAllCloseBodyParticles(self.hostTriIds, pos, bodyPos, 5)
-        self.numCollisions = self.readTriPointPairs("tri_point_pairs.txt", self.hostTriIds)
+        self.numColClothToBody, self.numColBodyToCloth = self.readTriPointPairs("tri_point_pairs.txt", self.hostTriIds, self.bodyTriIds)
         end_time = time.time()
         print("Elapsed time:", end_time - start_time, "seconds")
-        print("Num collisions =", self.numCollisions)
+        print("Num collisions =", self.numColClothToBody, self.numColBodyToCloth)
         print(str(self.numTris) + " triangles created")
         print(str(self.numDistConstraints) + " distance constraints created")
         print(str(self.numParticles) + " particles created")
@@ -526,38 +527,6 @@ class Cloth:
         # vel[pNr] = vel[pNr] + c
 
     @wp.kernel
-    def collide_cloth_tri_body_particle(
-        numParticles: int,
-        pos: wp.array(dtype = wp.vec3),
-        bodyPos: wp.array(dtype = wp.vec3),
-        clothTriIds: wp.array(dtype = wp.int32),
-        f: wp.array(dtype = wp.vec3)
-    ):
-        tid = wp.tid()
-        triNo = tid // numParticles
-        particleNo = tid % numParticles
-
-        particle = bodyPos[particleNo]
-        i, j, k = clothTriIds[3 * triNo], clothTriIds[3 * triNo + 1], clothTriIds[3 * triNo + 2]
-        p = pos[i]
-        q = pos[j]
-        r = pos[k]
-
-        bary = triangle_closest_point_barycentric(p, q, r, particle)
-        closest = p * bary[0] + q * bary[1] + r * bary[2]
-
-        diff = particle - closest
-        dist = wp.dot(diff, diff)
-        n = wp.normalize(diff)
-        c = wp.min(dist - 0.00025, 0.0)  # 0 unless within 0.01 of surface
-        if c == 0:
-            return
-        fn = n * c * 3e5
-        wp.atomic_add(f, i, fn * bary[0])
-        wp.atomic_add(f, j, fn * bary[1])
-        wp.atomic_add(f, k, fn * bary[2])
-
-    @wp.kernel
     def collide_cloth_tri_body_particle_fast(
         adjIds: wp.array(dtype = wp.int32),
         adjIdsTri: wp.array(dtype = wp.int32),
@@ -590,6 +559,36 @@ class Cloth:
         wp.atomic_add(f, j, fn * bary[1])
         wp.atomic_add(f, k, fn * bary[2])
         
+    @wp.kernel
+    def collide_body_tri_cloth_particle_fast(
+        adjIds: wp.array(dtype = wp.int32),
+        adjIdsTri: wp.array(dtype = wp.int32),
+        pos: wp.array(dtype = wp.vec3),
+        bodyPos: wp.array(dtype = wp.vec3),
+        clothTriIds: wp.array(dtype = wp.int32),
+        f: wp.array(dtype = wp.vec3)
+    ):
+        tid = wp.tid()
+        triNo = adjIdsTri[tid] 
+        particleNo = adjIds[tid]
+
+        particle = bodyPos[particleNo]
+        i, j, k = clothTriIds[3 * triNo], clothTriIds[3 * triNo + 1], clothTriIds[3 * triNo + 2]
+        p = pos[i]
+        q = pos[j]
+        r = pos[k]
+
+        bary = triangle_closest_point_barycentric(p, q, r, particle)
+        closest = p * bary[0] + q * bary[1] + r * bary[2]
+
+        diff = particle - closest
+        dist = wp.dot(diff, diff)
+        n = wp.normalize(diff)
+        c = wp.min(dist - 0.00025, 0.0)  # 0 unless within 0.01 of surface
+        if c == 0:
+            return
+        fn = n * c * 1e7
+        wp.atomic_sub(f, particleNo, fn)
 
     # ----------------------------------
     @wp.kernel
@@ -648,7 +647,7 @@ class Cloth:
     def getDist2(self, x, y, z, x1, y1, z1):
         return (x - x1) * (x - x1) + (y - y1) * (y - y1) + (z - z1) * (z - z1)
     # ----------------------------------
-    def readTriPointPairs(self, filename, triIds):
+    def readTriPointPairs(self, filename, triIds, triIds1):
         with open(filename, 'r') as file:
             n = int(file.readline().strip())  # Read the length of the arrays
             num = 0
@@ -665,9 +664,27 @@ class Cloth:
                 if idTri == 7135:
                     self.renderParticles2.append(self.adjIds[num])
                 num += 1
+            n1 = n
+            n = int(file.readline().strip())  # Read the length of the arrays
+            num = 0
+            self.adjIds1 = [0] * n
+            self.adjIdsTri1 = [0] * n
+            for _ in range(n):
+                idTri, id = map(int, file.readline().strip().split())
+                self.adjIds1[num] = id
+                self.adjIdsTri1[num] = idTri
+                if idTri == 13637 and len(self.renderParticles1) == 3:
+                    self.renderParticles2.append(triIds1[3 * idTri])
+                    self.renderParticles2.append(triIds1[3 * idTri + 1])
+                    self.renderParticles2.append(triIds1[3 * idTri + 2])
+                if idTri == 13637:
+                    self.renderParticles1.append(self.adjIds1[num])
+                num += 1
             self.adjIdsCuda = wp.array(self.adjIds, dtype = wp.int32, device = "cuda")
             self.adjIdsTriCuda = wp.array(self.adjIdsTri, dtype = wp.int32, device = "cuda")
-            return n
+            self.adjIdsCuda1 = wp.array(self.adjIds1, dtype = wp.int32, device = "cuda")
+            self.adjIdsTriCuda1 = wp.array(self.adjIdsTri1, dtype = wp.int32, device = "cuda")
+            return n1, n
 
     # ----------------------------------
     def queryAllCloseBodyParticles(self, triIds, triPos, pos, numPointsEach):
@@ -758,7 +775,13 @@ class Cloth:
             wp.launch(kernel = self.collide_cloth_tri_body_particle_fast,
                       inputs = [self.adjIdsCuda, self.adjIdsTriCuda, self.pos, self.bodyPos, 
                                 self.triIds, self.corr],
-                      dim = self.numCollisions,
+                      dim = self.numColClothToBody,
+                      device = "cuda")
+
+            wp.launch(kernel = self.collide_body_tri_cloth_particle_fast,
+                      inputs = [self.adjIdsCuda1, self.adjIdsTriCuda1, self.bodyPos, self.pos, 
+                                self.bodyTriIdsCuda, self.corr],
+                      dim = self.numColBodyToCloth,
                       device = "cuda")
 
             wp.launch(kernel = self.integrate_body_collisions, 

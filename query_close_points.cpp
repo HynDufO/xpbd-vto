@@ -43,7 +43,7 @@ double getDist2(double x, double y, double z, double x1, double y1, double z1) {
 
 void queryAllCloseBodyParticles(const vector<int> &triIds,
                                 const vector<double> &triPos,
-                                const vector<double> &pos, int numPointsEach) {
+                                const vector<double> &pos, int numPointsEach, int type) {
     int num = 0;
     int numTris = triIds.size() / 3;
     int numPoints = pos.size();
@@ -55,14 +55,29 @@ void queryAllCloseBodyParticles(const vector<int> &triIds,
         if (iTri % 1000 == 0) {
             cerr << "iTri = " << iTri << '\n';
         }
+        if (type == 1) {
+            bool ok = false;
+            for (int j = 0; j < 3; ++j) {
+                int p = triIds[3 * iTri + j];
+                if (triPos[3 * p + 1] < 0.56379 && triPos[3 * p + 1] > -0.24046) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (!ok) {
+                continue;
+            }
+        }
         priority_queue<pair<double, int>> heap;
 
         for (int iPoint = 0; iPoint < numPoints; ++iPoint) {
             double sumDist2 = 0;
             double x = pos[3 * iPoint], y = pos[3 * iPoint + 1],
                    z = pos[3 * iPoint + 2];
-            if (y >= 0.56379 || y <= -0.24046) {
-                continue;
+            if (type == 0) {
+                if (y >= 0.56379 || y <= -0.24046) {
+                    continue;
+                }
             }
 
             for (int j = 0; j < 3; ++j) {
@@ -122,5 +137,14 @@ int main() {
         bodyPos[3 * i + 1] = bodyVertices[i][1];
         bodyPos[3 * i + 2] = bodyVertices[i][2];
     }
-    queryAllCloseBodyParticles(hostTriIds, pos, bodyPos, 20);
+
+    numTris = triangles.size();
+    vector<int> hostBodyTriIds(3 * numTris);
+    for (int i = 0; i < numTris; ++i) {
+        hostBodyTriIds[3 * i] = triangles[i][0];
+        hostBodyTriIds[3 * i + 1] = triangles[i][1];
+        hostBodyTriIds[3 * i + 2] = triangles[i][2];
+    }
+    queryAllCloseBodyParticles(hostTriIds, pos, bodyPos, 30, 0);
+    queryAllCloseBodyParticles(hostBodyTriIds, bodyPos, pos, 30, 1);
 }
