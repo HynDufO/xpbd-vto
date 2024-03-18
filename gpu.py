@@ -265,7 +265,7 @@ numSubsteps = 30
 timeStep = 1.0 / 60.0
 # timeStep = 3.0
 gravity = wp.vec3(0.0, -9.8, 0.0)
-velMax = 0.03
+velMax = 0.5
 paused = False
 hidden = False
 frameNr = 0
@@ -520,7 +520,7 @@ class Cloth:
         self.adjIdsTri = [0] * (20 * 40000)
 
         vertices, triangles = self.readOBJFile(objFilePath)
-        bodyVertices, bodyTriangles = self.readOBJFile(bodyOBJFilePath)
+        bodyVertices, bodyTriangles = smpl.verts, smpl.faces 
         self.numParticles = len(vertices)
         self.numBodyParticles = len(bodyVertices)
         pos = np.zeros(3 * self.numParticles)
@@ -528,21 +528,16 @@ class Cloth:
         normals = np.zeros(3 * self.numParticles)
         invMass = np.zeros(self.numParticles)
 
-        mnY = 0
-        for v in bodyVertices:
-            mnY = min(mnY, v[1])
         for i in range(self.numParticles):
             pos[3 * i] = vertices[i][0]
-            pos[3 * i + 1] = vertices[i][1] - mnY 
+            pos[3 * i + 1] = vertices[i][1]
             pos[3 * i + 2] = vertices[i][2]
             invMass[i] = 1
 
         for i in range(len(bodyVertices)):
             bodyPos[3 * i] = bodyVertices[i][0]
-            bodyPos[3 * i + 1] = bodyVertices[i][1] - mnY
+            bodyPos[3 * i + 1] = bodyVertices[i][1]
             bodyPos[3 * i + 2] = bodyVertices[i][2]
-
-        spacing = 0.001
 
         self.pos = wp.array(pos, dtype = wp.vec3, device = "cuda")
         self.prevPos = wp.array(pos, dtype = wp.vec3, device = "cuda")
@@ -705,6 +700,14 @@ class Cloth:
             pos[pNr] = wp.vec3(p[0], thickness, p[2])
 
     @wp.kernel
+    def update_body_pos(
+        pos: wp.array(dtype = wp.vec3),
+        delta: wp.array(dtype = wp.vec3)):
+
+        pNr = wp.tid()
+        pos[pNr] += delta[pNr] 
+
+    @wp.kernel
     def integrate_gravity(
             dt: float,
             vMax: float,
@@ -770,7 +773,7 @@ class Cloth:
         c = wp.min(dist - 0.00025, 0.0)  # 0 unless within 0.01 of surface
         if c == 0:
             return
-        fn = n * c * 9e5
+        fn = n * c * 2e7
         wp.atomic_add(f, i, fn * bary[0])
         wp.atomic_add(f, j, fn * bary[1])
         wp.atomic_add(f, k, fn * bary[2])
@@ -803,7 +806,7 @@ class Cloth:
         c = wp.min(dist - 0.00025, 0.0)  # 0 unless within 0.01 of surface
         if c == 0:
             return
-        fn = n * c * 1e7
+        fn = n * c * 3e8
         wp.atomic_sub(f, particleNo, fn)
 
     # ----------------------------------
@@ -945,10 +948,21 @@ class Cloth:
         dt = timeStep / numSubsteps
         numPasses = len(self.passSizes)
 
+        # Read 24x3 poses data from stdin
+        line = sys.stdin.readline().strip()
+        poses = np.array(list(map(float, line.split()))).reshape((24, 3))
+        prevVerts = smpl.verts
+        smpl.set_params(pose=poses)
+        deltaBody = (smpl.verts - prevVerts) / numSubsteps
+        deltaBodyCuda = wp.array(deltaBody, dtype = wp.vec3, device = "cuda")
+
         for step in range(numSubsteps):  
             # wp.launch(kernel = self.integrate, 
             #     inputs = [dt, gravity, self.invMass, self.prevPos, self.pos, self.vel, self.sphereCenter, self.sphereRadius], 
             #     dim = self.numParticles, device = "cuda")
+            wp.launch(kernel = self.update_body_pos, 
+                inputs = [self.bodyPos, deltaBodyCuda], 
+                dim = self.numBodyParticles, device = "cuda")
             wp.launch(kernel = self.integrate_gravity, 
                 inputs = [dt, velMax, gravity, self.invMass, self.prevPos, self.pos, self.vel], 
                 dim = self.numParticles, device = "cuda")
@@ -1008,6 +1022,7 @@ class Cloth:
                 inputs = [dt, self.prevPos, self.pos, self.vel], dim = self.numParticles, device = "cuda")
             
         wp.copy(self.hostPos, self.pos)
+        wp.copy(self.hostBodyPos, self.bodyPos)
 
     # -------------------------------------------------
     def reset(self):
@@ -1217,19 +1232,19 @@ def showScreen():
 
     # ground plane
 
-    glColor3f(1.0, 1.0, 1.0)
-    glNormal3f(0.0, 1.0, 0.0)
-
-    numVerts = math.floor(len(groundVerts) / 3)
-
-    glVertexPointer(3, GL_FLOAT, 0, groundVerts)
-    glColorPointer(3, GL_FLOAT, 0, groundColors)
-
-    glEnableClientState(GL_VERTEX_ARRAY)
-    glEnableClientState(GL_COLOR_ARRAY)
-    glDrawArrays(GL_QUADS, 0, numVerts)
-    glDisableClientState(GL_VERTEX_ARRAY)
-    glDisableClientState(GL_COLOR_ARRAY)
+    # glColor3f(1.0, 1.0, 1.0)
+    # glNormal3f(0.0, 1.0, 0.0)
+    #
+    # numVerts = math.floor(len(groundVerts) / 3)
+    #
+    # glVertexPointer(3, GL_FLOAT, 0, groundVerts)
+    # glColorPointer(3, GL_FLOAT, 0, groundColors)
+    #
+    # glEnableClientState(GL_VERTEX_ARRAY)
+    # glEnableClientState(GL_COLOR_ARRAY)
+    # glDrawArrays(GL_QUADS, 0, numVerts)
+    # glDisableClientState(GL_VERTEX_ARRAY)
+    # glDisableClientState(GL_COLOR_ARRAY)
 
     # objects
 
