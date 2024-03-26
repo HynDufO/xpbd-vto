@@ -260,12 +260,12 @@ beta = np.array([
 smpl.set_params(beta=beta)
 # ---------------------------------------------
 
-targetFps = 60
+targetFps = 32
 numSubsteps = 30
-timeStep = 1.0 / 60.0
+timeStep = 1.0 / 32.0
 # timeStep = 3.0
 gravity = wp.vec3(0.0, -9.8, 0.0)
-velMax = 0.5
+velMax = 1
 paused = False
 hidden = False
 frameNr = 0
@@ -342,6 +342,17 @@ class Cloth:
         p0 = pos[constIds[2 * cNr]]
         p1 = pos[constIds[2 * cNr + 1]]
         restLengths[cNr] = wp.length(p1 - p0)
+
+    @wp.kernel
+    def computeRestLengthsClothBody(
+            clothPos: wp.array(dtype = wp.vec3),
+            bodyPos: wp.array(dtype = wp.vec3),
+            constIds: wp.array(dtype = wp.int32),
+            restLengths: wp.array(dtype = float)):
+        cNr = wp.tid()
+        p0 = clothPos[constIds[2 * cNr]]
+        p1 = bodyPos[constIds[2 * cNr + 1]]
+        restLengths[cNr] = wp.length(p1 - p0) + 0.0005
 
     # -----------------------------------------------------
     def __init__(self, yOffset, numX, numY, spacing, sphereCenter, sphereRadius, objFilePath=None, bodyOBJFilePath=None, constraintsFilePath=None):
@@ -597,9 +608,27 @@ class Cloth:
         self.distConstIds = wp.array(distConstIds, dtype = wp.int32, device = "cuda")
         self.constRestLengths = wp.zeros(self.numDistConstraints, dtype = float, device = "cuda")
 
+        distConstIdsClothBody = np.zeros(1, dtype = wp.int32)
+        with open("cloth_body_constraints.txt", "r") as file:
+            lines = file.readlines()
+            numClothBodyConstraints = int(lines[0])
+            self.numClothBodyConstraints = numClothBodyConstraints
+            distConstIdsClothBody = np.zeros(2 * numClothBodyConstraints, dtype = wp.int32)
+            for i in range(numClothBodyConstraints):
+                clothId, bodyId = map(int, lines[i + 1].split())
+                distConstIdsClothBody[2 * i] = clothId
+                distConstIdsClothBody[2 * i + 1] = bodyId
+
+        self.distConstIdsClothBody = wp.array(distConstIdsClothBody, dtype = wp.int32, device = "cuda")
+        self.constRestLengthsClothBody = wp.zeros(len(distConstIdsClothBody), dtype = float, device = "cuda")
+
         wp.launch(kernel = self.computeRestLengths,
                 inputs = [self.pos, self.distConstIds, self.constRestLengths], 
                 dim = self.numDistConstraints,  device = "cuda")
+        wp.launch(kernel = self.computeRestLengthsClothBody,
+                inputs = [self.pos, self.bodyPos, self.distConstIdsClothBody, self.constRestLengthsClothBody], 
+                dim = len(distConstIdsClothBody),  device = "cuda")
+
 
         # tri ids
 
@@ -629,7 +658,7 @@ class Cloth:
         print("Elapsed time:", end_time - start_time, "seconds")
         print("Num collisions =", self.numColClothToBody, self.numColBodyToCloth)
         print(str(self.numTris) + " triangles created")
-        print(str(self.numDistConstraints) + " distance constraints created")
+        print(str(self.numDistConstraints + self.numClothBodyConstraints) + " distance constraints created")
         print(str(self.numParticles) + " particles created")
 
     # ----------------------------------
@@ -773,7 +802,7 @@ class Cloth:
         c = wp.min(dist - 0.00025, 0.0)  # 0 unless within 0.01 of surface
         if c == 0:
             return
-        fn = n * c * 2e7
+        fn = n * c * 8e6
         wp.atomic_add(f, i, fn * bary[0])
         wp.atomic_add(f, j, fn * bary[1])
         wp.atomic_add(f, k, fn * bary[2])
@@ -806,7 +835,7 @@ class Cloth:
         c = wp.min(dist - 0.00025, 0.0)  # 0 unless within 0.01 of surface
         if c == 0:
             return
-        fn = n * c * 3e8
+        fn = n * c * 1e7
         wp.atomic_sub(f, particleNo, fn)
 
     # ----------------------------------
@@ -841,6 +870,28 @@ class Cloth:
         else:
             wp.atomic_add(pos, id0, w0 * dP)
             wp.atomic_sub(pos, id1, w1 * dP)
+
+    @wp.kernel
+    def solveDistanceConstraintsClothBody(
+            invMass: wp.array(dtype = float),
+            pos: wp.array(dtype = wp.vec3),
+            bodyPos: wp.array(dtype = wp.vec3),
+            constIds: wp.array(dtype = wp.int32),
+            restLengths: wp.array(dtype = float)):
+
+        cNr = wp.tid()
+        id0 = constIds[2 * cNr]
+        id1 = constIds[2 * cNr + 1]
+        w0 = invMass[id0]
+        w = w0 + 1.0
+        p0 = pos[id0]
+        p1 = bodyPos[id1]
+        d = p1 - p0
+        n = wp.normalize(d)
+        l = wp.length(d)
+        l0 = restLengths[cNr]
+        dP = n * (l - l0) / (w)
+        wp.atomic_add(pos, id0, w0 * dP)
 
     # ----------------------------------
     @wp.kernel
@@ -973,6 +1024,7 @@ class Cloth:
                     numConstraints = self.passSizes[passNr]
 
                     if self.passIndependent[passNr]:
+                        # something
                         wp.launch(kernel = self.solveDistanceConstraints,
                             inputs = [0, firstConstraint, self.invMass, self.pos, self.corr, self.distConstIds, self.constRestLengths], 
                             dim = numConstraints,  device = "cuda")
@@ -996,6 +1048,10 @@ class Cloth:
                     inputs = [self.pos, self.corr, jacobiScale], 
                     dim = self.numParticles,  device = "cuda")
 
+            # cloth-body distance constraints
+            wp.launch(kernel = self.solveDistanceConstraintsClothBody,
+                inputs = [self.invMass, self.pos, self.bodyPos, self.distConstIdsClothBody, self.constRestLengthsClothBody], 
+                dim = self.numClothBodyConstraints,  device = "cuda")
             self.corr.zero_()
             # wp.launch(kernel = self.collide_cloth_tri_body_particle,
             #           inputs = [self.numBodyParticles, self.pos, self.bodyPos, 

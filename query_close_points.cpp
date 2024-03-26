@@ -38,28 +38,26 @@ void readOBJFile(const string &file_path) {
 }
 
 double getDist2(double x, double y, double z, double x1, double y1, double z1) {
-    return (x - x1) * (x - x1) + (y - y1) * (y - y1) * 0.5 + (z - z1) * (z - z1);
+    return (x - x1) * (x - x1) + (y - y1) * (y - y1) * 0.8 + (z - z1) * (z - z1);
 }
 
 void queryAllCloseBodyParticles(const vector<int> &triIds,
                                 const vector<double> &triPos,
                                 const vector<double> &pos, int numPointsEach, int type) {
-    int num = 0;
     int numTris = triIds.size() / 3;
-    int numPoints = pos.size();
+    int numPoints = pos.size() / 3;
     vector<int> adjIds, adjIdsTri;
-    adjIds.resize(numPointsEach * numTris);
-    adjIdsTri.resize(numPointsEach * numTris);
 
     for (int iTri = 0; iTri < numTris; ++iTri) {
         if (iTri % 1000 == 0) {
             cerr << "iTri = " << iTri << '\n';
         }
+
         if (type == 1) {
             bool ok = false;
             for (int j = 0; j < 3; ++j) {
                 int p = triIds[3 * iTri + j];
-                if (triPos[3 * p + 1] < 0.56379 && triPos[3 * p + 1] > -0.24046) {
+                if (triPos[3 * p + 1] < 0.33 && triPos[3 * p + 1] > -0.434) {
                     ok = true;
                     break;
                 }
@@ -68,6 +66,18 @@ void queryAllCloseBodyParticles(const vector<int> &triIds,
                 continue;
             }
         }
+        int pp = triIds[3 * iTri];
+        if (triPos[3 * pp] < -0.6 || triPos[3 * pp] > 0.6) {
+            numPointsEach = 180;
+        } else if (triPos[3 * pp] < -0.5 || triPos[3 * pp] > 0.5) {
+            numPointsEach = 140;
+        } else if (triPos[3 * pp] < -0.4 || triPos[3 * pp] > 0.4) {
+            numPointsEach = 100;
+        } else if (triPos[3 * pp + 1] > 0.1) {
+            numPointsEach = 80;
+        } else {
+            numPointsEach = 30;
+        }
         priority_queue<pair<double, int>> heap;
 
         for (int iPoint = 0; iPoint < numPoints; ++iPoint) {
@@ -75,7 +85,7 @@ void queryAllCloseBodyParticles(const vector<int> &triIds,
             double x = pos[3 * iPoint], y = pos[3 * iPoint + 1],
                    z = pos[3 * iPoint + 2];
             if (type == 0) {
-                if (y >= 0.56379 || y <= -0.24046) {
+                if (y >= 0.35 || y <= -0.454) {
                     continue;
                 }
             }
@@ -97,14 +107,13 @@ void queryAllCloseBodyParticles(const vector<int> &triIds,
         assert(heap.size() == numPointsEach);
 
         while (!heap.empty()) {
-            adjIds[num] = heap.top().second;
-            adjIdsTri[num] = iTri;
+            adjIds.push_back(heap.top().second);
+            adjIdsTri.push_back(iTri);
             heap.pop();
-            num++;
         }
     }
-    cout << num << '\n';
-    for (int i = 0; i < num; ++i) {
+    cout << adjIds.size() << '\n';
+    for (int i = 0; i < adjIds.size(); ++i) {
         cout << adjIdsTri[i] << ' ' << adjIds[i] << '\n';
     }
 }
@@ -145,6 +154,6 @@ int main() {
         hostBodyTriIds[3 * i + 1] = triangles[i][1];
         hostBodyTriIds[3 * i + 2] = triangles[i][2];
     }
-    queryAllCloseBodyParticles(hostTriIds, pos, bodyPos, 30, 0);
-    queryAllCloseBodyParticles(hostBodyTriIds, bodyPos, pos, 30, 1);
+    queryAllCloseBodyParticles(hostTriIds, pos, bodyPos, 20, 0);
+    queryAllCloseBodyParticles(hostBodyTriIds, bodyPos, pos, 20, 1);
 }
