@@ -50,7 +50,7 @@ void queryClothBodyConstraints(const vector<double> &clothPos,
     vector<pair<int, int>> vec;
 
     for (int i = 0; i < numPointsCloth; ++i) {
-        if (i == 4692 || i == 13768 || i == 9806 || i == 9812 || i == 19471 || i == 19464 || i == 2500 || i == 19133 || i == 13737 || i == 13748 || i == 13418 || i == 8188 || i == 3100 || i == 12064 || i == 12044 || i == 11951 || i == 1366 || i == 11651) {
+        if (i == 4692 || i == 13768 || i == 9806 || i == 9812 || i == 19471 || i == 19464 || i == 2500 || i == 19133 || i == 13737 || i == 13748 || i == 13418 || i == 8188 || i == 3100 || i == 12064 || i == 12044 || i == 11951 || i == 1366 || i == 11651 || i == 12521) {
             cerr << "i = " << i << '\n';
             double mnDist = 1e9;
             int mnID = 0;

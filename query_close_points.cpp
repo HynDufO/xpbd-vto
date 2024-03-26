@@ -68,13 +68,13 @@ void queryAllCloseBodyParticles(const vector<int> &triIds,
         }
         int pp = triIds[3 * iTri];
         if (triPos[3 * pp] < -0.6 || triPos[3 * pp] > 0.6) {
-            numPointsEach = 180;
+            numPointsEach = 150;
         } else if (triPos[3 * pp] < -0.5 || triPos[3 * pp] > 0.5) {
-            numPointsEach = 140;
+            numPointsEach = 150;
         } else if (triPos[3 * pp] < -0.4 || triPos[3 * pp] > 0.4) {
-            numPointsEach = 100;
-        } else if (triPos[3 * pp + 1] > 0.1) {
-            numPointsEach = 80;
+            numPointsEach = 150;
+        } else if (triPos[3 * pp + 1] > 0.2 && triPos[3 * pp + 1] < 0.27) {
+            numPointsEach = 150;
         } else {
             numPointsEach = 30;
         }

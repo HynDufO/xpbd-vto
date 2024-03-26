@@ -3,7 +3,7 @@ import sys
 import time
 
 # Load data from the .npy file
-data = np.load('start_with_t_pose.npy')
+data = np.load('start_with_t_pose_1.npy')
 
 # Define frames per second (fps)
 fps = 33
