@@ -64,8 +64,8 @@ void getClosestBodyPoint(const vector<double> &pos,
 
 }
 int main() {
-    freopen("corr_weights.txt", "w", stdout);
-    readOBJFile("starlight_tri_before.obj");
+    freopen("corr_weights_combine_3.txt", "w", stdout);
+    readOBJFile("starlight_lbs_3.obj");
     int numParticles = (int)vertices.size();
     cerr << "numParticles = " << numParticles << '\n';
     vector<double> pos(3 * numParticles);

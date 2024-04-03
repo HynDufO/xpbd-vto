@@ -271,10 +271,9 @@ class SMPLModel():
         fp.write('f %d %d %d\n' % (f[0], f[1], f[2]))
 
 class ClothLBS:
-    def __init__(self, smpl, vertices, faces, corr_path):
+    def __init__(self, smpl, vertices, corr_path):
         self.ori_verts = np.array(vertices)
         self.verts = np.array(vertices)
-        self.faces = np.array(faces)
         self.weights = np.zeros((len(self.verts), 24))
         with open(corr_path, 'r') as f:
             for line in f:
@@ -569,14 +568,12 @@ class Cloth:
         self.dragDepth = 0.0
         self.dragInvMass = 0.0
         self.renderParticles = []
-        self.renderParticles1 = []
-        self.renderParticles2 = []
         
         self.adjIds = [0] * (20 * 40000)
         self.adjIdsTri = [0] * (20 * 40000)
 
         vertices, triangles = self.readOBJFile(objFilePath)
-        self.clothLBS = ClothLBS(smpl, vertices, triangles, "corr_weights.txt")
+        self.clothLBS = ClothLBS(smpl, vertices, "corr_weights.txt")
         bodyVertices, bodyTriangles = smpl.verts, smpl.faces 
         self.numParticles = len(vertices)
         self.numBodyParticles = len(bodyVertices)
@@ -973,12 +970,6 @@ class Cloth:
                 idTri, id = map(int, file.readline().strip().split())
                 self.adjIds[num] = id
                 self.adjIdsTri[num] = idTri
-                if idTri == 7135 and len(self.renderParticles1) == 0:
-                    self.renderParticles1.append(triIds[3 * idTri])
-                    self.renderParticles1.append(triIds[3 * idTri + 1])
-                    self.renderParticles1.append(triIds[3 * idTri + 2])
-                if idTri == 7135:
-                    self.renderParticles2.append(self.adjIds[num])
                 num += 1
             n1 = n
             n = int(file.readline().strip())  # Read the length of the arrays
@@ -989,12 +980,6 @@ class Cloth:
                 idTri, id = map(int, file.readline().strip().split())
                 self.adjIds1[num] = id
                 self.adjIdsTri1[num] = idTri
-                if idTri == 13637 and len(self.renderParticles1) == 3:
-                    self.renderParticles2.append(triIds1[3 * idTri])
-                    self.renderParticles2.append(triIds1[3 * idTri + 1])
-                    self.renderParticles2.append(triIds1[3 * idTri + 2])
-                if idTri == 13637:
-                    self.renderParticles1.append(self.adjIds1[num])
                 num += 1
             self.adjIdsCuda = wp.array(self.adjIds, dtype = wp.int32, device = "cuda")
             self.adjIdsTriCuda = wp.array(self.adjIdsTri, dtype = wp.int32, device = "cuda")
@@ -1026,13 +1011,7 @@ class Cloth:
             for i in range(numPointsEach):
                 self.adjIds[num] = heap[i][1]
                 self.adjIdsTri[num] = iTri 
-                if iTri == 12000:
-                    self.renderParticles2.append(self.adjIds[num])
                 num += 1
-            if iTri == 12000:
-                self.renderParticles1.append(triIds[3 * iTri])
-                self.renderParticles1.append(triIds[3 * iTri + 1])
-                self.renderParticles1.append(triIds[3 * iTri + 2])
 
         self.adjIdsCuda = wp.array(self.adjIds[:num], dtype = wp.int32, device = "cuda")
         self.adjIdsTriCuda = wp.array(self.adjIdsTri[:num], dtype = wp.int32, device = "cuda")
@@ -1212,21 +1191,6 @@ class Cloth:
         if self.dragParticleNr >= 0:
             self.renderParticles.pop()
 
-        for id in self.renderParticles1:
-            glPushMatrix()
-            p = pos[id]
-            glTranslatef(p[0], p[1], p[2])
-            gluSphere(q, 0.005, 40, 40)
-            glPopMatrix()
-
-        for id in self.renderParticles2:
-            glPushMatrix()
-            p = bodyPos[id]
-            glTranslatef(p[0], p[1], p[2])
-            glColor3f(0.0, 0.0, 1.0)
-            gluSphere(q, 0.005, 40, 40)
-            glPopMatrix()
-            
         # sphere
         # glColor3f(0.8, 0.8, 0.8)
         #

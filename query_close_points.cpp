@@ -69,14 +69,17 @@ void queryAllCloseBodyParticles(const vector<int> &triIds,
         int pp = triIds[3 * iTri];
         if (triPos[3 * pp] < -0.6 || triPos[3 * pp] > 0.6) {
             numPointsEach = 150;
+            continue;
         } else if (triPos[3 * pp] < -0.5 || triPos[3 * pp] > 0.5) {
             numPointsEach = 150;
+            continue;
         } else if (triPos[3 * pp] < -0.4 || triPos[3 * pp] > 0.4) {
             numPointsEach = 150;
+            continue;
         } else if (triPos[3 * pp + 1] > 0.2 && triPos[3 * pp + 1] < 0.27) {
-            numPointsEach = 150;
+            numPointsEach = 40;
         } else {
-            numPointsEach = 30;
+            numPointsEach = 40;
         }
         priority_queue<pair<double, int>> heap;
 
@@ -118,7 +121,7 @@ void queryAllCloseBodyParticles(const vector<int> &triIds,
     }
 }
 int main() {
-    freopen("tri_point_pairs.txt", "w", stdout);
+    freopen("tri_point_pairs_lbs.txt", "w", stdout);
     readOBJFile("starlight_tri.obj");
     int numParticles = (int)vertices.size();
     cerr << "numParticles = " << numParticles << '\n';
